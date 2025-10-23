@@ -51,8 +51,17 @@ h1 {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  touch-action: none; /* スワイプ時スクロール防止 */
+  touch-action: none;
 }
+
+/* 👇これを追加 */
+#overlay {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 10;
+}
+
 
 /* ボタンや設定 */
 .controls {
@@ -271,8 +280,8 @@ function resizeOverlay(){
   const rect = video.getBoundingClientRect();
   overlay.width = rect.width;
   overlay.height = rect.height;
-  overlay.style.left = rect.left + 'px';
-  overlay.style.top = rect.top + 'px';
+  // overlay.style.left = rect.left + 'px'; ←削除
+  // overlay.style.top = rect.top + 'px'; ←削除
   drawOverlay();
 }
 

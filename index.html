@@ -156,6 +156,7 @@ async function initCamera(){
     await video.play();
     resizeOverlay();
     window.addEventListener('resize', resizeOverlay);
+    window.addEventListener('scroll', resizeOverlay); // ←★この1行を追加！
     drawOverlay(); // initial draw
     status('カメラ起動');
   } catch (e) {

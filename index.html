@@ -275,43 +275,86 @@ async function initCamera(){
   }
 }
 
-// resize overlay canvas to match video display size
+// ----- resizeOverlay (DPR対応) -----
 function resizeOverlay(){
+  // get video size on screen (CSS pixels)
   const rect = video.getBoundingClientRect();
-  overlay.width = rect.width;
-  overlay.height = rect.height;
-  // overlay.style.left = rect.left + 'px'; ←削除
-  // overlay.style.top = rect.top + 'px'; ←削除
+  const cssW = Math.max(1, Math.floor(rect.width));
+  const cssH = Math.max(1, Math.floor(rect.height));
+
+  // devicePixelRatio を考慮して内部解像度を設定（座標計算はCSSピクセルで行う）
+  const dpr = window.devicePixelRatio || 1;
+  overlay.style.width  = cssW + 'px';
+  overlay.style.height = cssH + 'px';
+  overlay.width  = Math.floor(cssW * dpr);
+  overlay.height = Math.floor(cssH * dpr);
+
+  // scale context so drawing uses CSS-pixel coordinates
+  overlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // ensure overlay sits exactly on top of video (previewWrap is relative)
+  overlay.style.position = 'absolute';
+  overlay.style.left = '0px';
+  overlay.style.top = '0px';
+  overlay.style.zIndex = 10;
+
   drawOverlay();
 }
 
-// draw selection rectangle on overlay continuously
-function drawOverlay(){
-  overlayCtx.clearRect(0,0,overlay.width,overlay.height);
-  // draw translucent mask
+// videoの内部アスペクトと表示領域のズレを補正して描画
+function drawOverlay() {
+  overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
+
+  const cssW = overlay.getBoundingClientRect().width;
+  const cssH = overlay.getBoundingClientRect().height;
+
+  // videoのアスペクト比を取得
+  const videoAspect = video.videoWidth / video.videoHeight;
+  const displayAspect = cssW / cssH;
+
+  let offsetX = 0, offsetY = 0, drawW = cssW, drawH = cssH;
+
+  // object-fit: cover の場合、どちらかが切り取られる
+  if (videoAspect > displayAspect) {
+    // 横長 → 上下に黒帯なし、左右をカット
+    drawH = cssH;
+    drawW = cssH * videoAspect;
+    offsetX = (cssW - drawW) / 2;
+  } else {
+    // 縦長 → 左右黒帯なし、上下をカット
+    drawW = cssW;
+    drawH = cssW / videoAspect;
+    offsetY = (cssH - drawH) / 2;
+  }
+
+  // 背景マスク
   overlayCtx.fillStyle = 'rgba(0,0,0,0.25)';
-  overlayCtx.fillRect(0,0,overlay.width,overlay.height);
-  // compute pixel region
-  const r = regionToPixels(region, overlay.width, overlay.height);
-  // clear the region area
-  overlayCtx.clearRect(r.x,r.y,r.w,r.h);
-  // draw border
+  overlayCtx.fillRect(0, 0, cssW, cssH);
+
+  // OCR領域をピクセル座標に変換（video内→表示上）
+  const r = regionToPixels(region, drawW, drawH);
+  const drawX = r.x + offsetX;
+  const drawY = r.y + offsetY;
+
+  // 透明部分をクリアして枠線を描画
+  overlayCtx.clearRect(drawX, drawY, r.w, r.h);
   overlayCtx.strokeStyle = '#00FF77';
   overlayCtx.lineWidth = 2;
-  overlayCtx.strokeRect(r.x + 0.5, r.y + 0.5, r.w -1, r.h -1);
-  // label
+  overlayCtx.strokeRect(drawX + 0.5, drawY + 0.5, r.w - 1, r.h - 1);
+
   overlayCtx.font = '14px sans-serif';
   overlayCtx.fillStyle = '#00FF77';
-  overlayCtx.fillText('OCR領域', r.x+6, r.y+18);
-  // if user is drawing selection
+  overlayCtx.fillText('OCR領域', drawX + 6, drawY + 18);
+
+  // 選択中（描画中）なら黄色枠を描画
   if (selRect) {
     overlayCtx.strokeStyle = '#FFD54D';
     overlayCtx.strokeRect(selRect.x, selRect.y, selRect.w, selRect.h);
   }
-  requestAnimationFrame(()=>{});
 }
 
-function regionToPixels(r, width, height){
+// region <-> pixels は video座標系で計算する（補正後も安定）
+function regionToPixels(r, width, height) {
   return {
     x: Math.round(r.x * width),
     y: Math.round(r.y * height),
@@ -320,7 +363,7 @@ function regionToPixels(r, width, height){
   };
 }
 
-function pixelsToRegion(p, width, height){
+function pixelsToRegion(p, width, height) {
   return {
     x: p.x / width,
     y: p.y / height,
@@ -329,37 +372,56 @@ function pixelsToRegion(p, width, height){
   };
 }
 
-// selection events (pointer) スマホ対応・スクロール防止版
+
+// ----- pointer handlers (use pointer capture; compute coords in CSS pixels) -----
 overlay.addEventListener('pointerdown', (e) => {
-  e.preventDefault(); // スクロールやズームを防止
+  // only left mouse or touch/pen
+  if (e.button && e.button !== 0) return;
+  e.preventDefault();
+  overlay.setPointerCapture && overlay.setPointerCapture(e.pointerId);
   selecting = true;
+
   const rect = overlay.getBoundingClientRect();
+  // compute coords in CSS pixels relative to overlay
   selStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
   selRect = { x: selStart.x, y: selStart.y, w: 0, h: 0 };
+  drawOverlay();
 });
 
 overlay.addEventListener('pointermove', (e) => {
   if (!selecting) return;
-  e.preventDefault(); // ←ここも重要
+  e.preventDefault();
   const rect = overlay.getBoundingClientRect();
-  const px = e.clientX - rect.left;
-  const py = e.clientY - rect.top;
+  const px = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  const py = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
   selRect.w = px - selStart.x;
   selRect.h = py - selStart.y;
-  // normalize so w,h positive
+
+  // normalize to positive width/height while keeping x,y as top-left
   if (selRect.w < 0) { selRect.x = selStart.x + selRect.w; selRect.w = Math.abs(selRect.w); } else { selRect.x = selStart.x; }
   if (selRect.h < 0) { selRect.y = selStart.y + selRect.h; selRect.h = Math.abs(selRect.h); } else { selRect.y = selStart.y; }
+
   drawOverlay();
 });
 
 overlay.addEventListener('pointerup', (e) => {
   e.preventDefault();
+  try { overlay.releasePointerCapture && overlay.releasePointerCapture(e.pointerId); } catch(_) {}
   if (!selecting) return;
   selecting = false;
-  // commit region
-  const rect = overlay.getBoundingClientRect();
+
+  // if selRect is too small, ignore
+  if (!selRect || selRect.w < 4 || selRect.h < 4) {
+    selRect = null;
+    drawOverlay();
+    return;
+  }
+
+  // commit region using CSS pixel sizes
+  const widthCss = overlay.getBoundingClientRect().width;
+  const heightCss = overlay.getBoundingClientRect().height;
   const p = { x: selRect.x, y: selRect.y, w: selRect.w, h: selRect.h };
-  region = pixelsToRegion(p, overlay.width, overlay.height);
+  region = pixelsToRegion(p, widthCss, heightCss);
   selRect = null;
   drawOverlay();
 });
